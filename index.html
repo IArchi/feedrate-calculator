@@ -118,7 +118,13 @@
       line-height: 1.4;
     }
 
-    .rpm-tabs {
+    .unit-switch {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .segmented-control {
       display: flex;
       gap: 0;
       border-radius: 12px;
@@ -126,7 +132,7 @@
       border: 1px solid var(--border);
     }
 
-    .rpm-tab {
+    .segmented-button {
       flex: 1 1 0;
       border: 0;
       background: #fff;
@@ -135,11 +141,11 @@
       cursor: pointer;
     }
 
-    .rpm-tab + .rpm-tab {
+    .segmented-button + .segmented-button {
       border-left: 1px solid var(--border);
     }
 
-    .rpm-tab.is-active {
+    .segmented-button.is-active {
       background: var(--primary);
       color: #fff;
       font-weight: 600;
@@ -227,6 +233,15 @@
       <article class="card">
         <h2>Inputs</h2>
         <form id="calculator-form" class="form-grid" autocomplete="off">
+          <div class="field field--full unit-switch">
+            <label>Units</label>
+            <div class="segmented-control" role="tablist" aria-label="Units">
+              <button type="button" class="segmented-button is-active" data-unit-mode="mm">mm</button>
+              <button type="button" class="segmented-button" data-unit-mode="inch">inch</button>
+            </div>
+            <input type="hidden" id="unitMode" value="mm">
+          </div>
+
           <div class="field field--full">
             <label for="toolType">Tool type</label>
             <select id="toolType" name="toolType">
@@ -242,7 +257,7 @@
           </div>
 
           <div class="field">
-            <label for="diameter">Tool diameter (mm)</label>
+            <label for="diameter">Tool diameter</label>
             <input id="diameter" name="diameter" type="number" min="0.1" step="0.1" value="6">
           </div>
 
@@ -252,16 +267,16 @@
           </div>
 
           <div class="field">
-            <label for="thickness">Material thickness (mm)</label>
+            <label for="thickness">Material thickness</label>
             <input id="thickness" name="thickness" type="number" min="0.1" step="0.1" value="18">
           </div>
 
           <div class="field field--full">
             <label>Router RPM</label>
-            <div class="rpm-tabs" role="tablist" aria-label="RPM mode">
-              <button type="button" class="rpm-tab" data-rpm-mode="manual">Manual</button>
-              <button type="button" class="rpm-tab is-active" data-rpm-mode="makita">Makita RT07</button>
-              <button type="button" class="rpm-tab" data-rpm-mode="dewalt">Dewalt DW6xx</button>
+            <div class="segmented-control" role="tablist" aria-label="RPM mode">
+              <button type="button" class="segmented-button" data-rpm-mode="manual">Manual</button>
+              <button type="button" class="segmented-button is-active" data-rpm-mode="makita">Makita RT07</button>
+              <button type="button" class="segmented-button" data-rpm-mode="dewalt">Dewalt DW6xx</button>
             </div>
             <input type="hidden" id="rpmMode" value="makita">
 
@@ -305,6 +320,7 @@
 
   <script>
     const STORAGE_KEY = 'feedrate-calculator';
+    const MM_PER_INCH = 25.4;
     const REFERENCE_TOOL_DIAMETER_MM = 6.0;
     const VBIT_CHIP_LOAD_FACTOR = 0.6;
     const DRILL_CHIP_LOAD_FACTOR = 0.5;
@@ -348,6 +364,8 @@
       toolType: document.getElementById('toolType'),
       material: document.getElementById('material'),
       thickness: document.getElementById('thickness'),
+      unitMode: document.getElementById('unitMode'),
+      unitTabs: Array.from(document.querySelectorAll('[data-unit-mode]')),
       rpmMode: document.getElementById('rpmMode'),
       rpmManual: document.getElementById('rpmManual'),
       rpmPreset: document.getElementById('rpmPreset'),
@@ -371,16 +389,88 @@
       return Math.round(value);
     }
 
-    function formatMm(value) {
-      return Number.isFinite(value) && value > 0 ? `${value.toFixed(1)} mm` : '—';
+    function normalizeUnitMode(mode) {
+      return ['mm', 'inch'].includes(mode) ? mode : 'mm';
     }
 
-    function formatFeed(value) {
-      return Number.isFinite(value) && value > 0 ? `${round(value).toLocaleString('fr-FR')} mm/min` : '—';
+    function convertToMm(value, unitMode) {
+      const numericValue = Number(value);
+      if (!Number.isFinite(numericValue)) return 0;
+      return normalizeUnitMode(unitMode) === 'inch' ? numericValue * MM_PER_INCH : numericValue;
+    }
+
+    function convertFromMm(value, unitMode) {
+      const numericValue = Number(value);
+      if (!Number.isFinite(numericValue)) return 0;
+      return normalizeUnitMode(unitMode) === 'inch' ? numericValue / MM_PER_INCH : numericValue;
+    }
+
+    function formatDecimal(value, decimals) {
+      return value.toFixed(decimals)
+        .replace(/\.0+$/, '')
+        .replace(/(\.\d*[1-9])0+$/, '$1');
+    }
+
+    function formatInputValue(value, unitMode) {
+      if (!Number.isFinite(value) || value <= 0) return '';
+      return formatDecimal(value, normalizeUnitMode(unitMode) === 'inch' ? 2 : 1);
+    }
+
+    function formatLength(valueMm, unitMode) {
+      if (!Number.isFinite(valueMm) || valueMm <= 0) return '—';
+      const normalizedUnitMode = normalizeUnitMode(unitMode);
+      const value = convertFromMm(valueMm, normalizedUnitMode);
+      return `${formatDecimal(value, normalizedUnitMode === 'inch' ? 2 : 1)} ${normalizedUnitMode === 'inch' ? 'in' : 'mm'}`;
+    }
+
+    function formatFeed(valueMmPerMin, unitMode) {
+      if (!Number.isFinite(valueMmPerMin) || valueMmPerMin <= 0) return '—';
+      const normalizedUnitMode = normalizeUnitMode(unitMode);
+      if (normalizedUnitMode === 'inch') {
+        return `${formatDecimal(convertFromMm(valueMmPerMin, 'inch'), 2)} in/min`;
+      }
+      return `${round(valueMmPerMin).toLocaleString('en-US')} mm/min`;
     }
 
     function normalizeToolType(toolType) {
       return ['End Mill', 'VBit', 'Drill'].includes(toolType) ? toolType : 'End Mill';
+    }
+
+    function setDimensionState(diameterMm, thicknessMm) {
+      elements.diameter.dataset.mmValue = String(Number.isFinite(diameterMm) ? diameterMm : 0);
+      elements.thickness.dataset.mmValue = String(Number.isFinite(thicknessMm) ? thicknessMm : 0);
+    }
+
+    function getDimensionState() {
+      return {
+        diameter: Number(elements.diameter.dataset.mmValue) || 0,
+        thickness: Number(elements.thickness.dataset.mmValue) || 0
+      };
+    }
+
+    function syncDimensionStateFromInputs() {
+      const unitMode = normalizeUnitMode(elements.unitMode.value);
+      setDimensionState(
+        convertToMm(elements.diameter.value, unitMode),
+        convertToMm(elements.thickness.value, unitMode)
+      );
+    }
+
+    function syncDimensionInputConfig() {
+      const unitMode = normalizeUnitMode(elements.unitMode.value);
+      const isInch = unitMode === 'inch';
+      elements.diameter.min = isInch ? '0.01' : '0.1';
+      elements.diameter.step = isInch ? '0.01' : '0.1';
+      elements.thickness.min = isInch ? '0.01' : '0.1';
+      elements.thickness.step = isInch ? '0.01' : '0.1';
+    }
+
+    function applyDimensionInputsFromState() {
+      const unitMode = normalizeUnitMode(elements.unitMode.value);
+      const dimensions = getDimensionState();
+      syncDimensionInputConfig();
+      elements.diameter.value = formatInputValue(convertFromMm(dimensions.diameter, unitMode), unitMode);
+      elements.thickness.value = formatInputValue(convertFromMm(dimensions.thickness, unitMode), unitMode);
     }
 
     function getDepthPerPass(toolType, diameter, thickness) {
@@ -463,6 +553,13 @@
       return ['manual', 'makita', 'dewalt'].includes(mode) ? mode : 'manual';
     }
 
+    function syncUnitModeUI() {
+      const mode = normalizeUnitMode(elements.unitMode.value);
+      elements.unitTabs.forEach((button) => {
+        button.classList.toggle('is-active', button.dataset.unitMode === mode);
+      });
+    }
+
     function getPresetOptions(mode) {
       return rpmPresets[normalizeRpmMode(mode)] || [];
     }
@@ -492,7 +589,7 @@
     function updatePresetHelp() {
       const mode = normalizeRpmMode(elements.rpmMode.value);
       const current = getPresetOptions(mode).find(option => option.value === elements.rpmPreset.value);
-      elements.rpmPresetHelp.textContent = current ? `${current.rpm.toLocaleString('fr-FR')} RPM` : 'Select a router speed preset';
+      elements.rpmPresetHelp.textContent = current ? `${current.rpm.toLocaleString('en-US')} RPM` : 'Select a router speed preset';
     }
 
     function syncRpmModeUI(preserveSelection = true) {
@@ -524,6 +621,7 @@
         toolType: 'End Mill',
         material: 'Hardwood / Plywood',
         thickness: 18,
+        unitMode: 'mm',
         rpmMode: 'makita',
         rpmManual: 18000,
         rpmPreset: '3'
@@ -551,11 +649,15 @@
     }
 
     function applyValues(values) {
+      const diameterMm = Number(values.diameter) > 0 ? Number(values.diameter) : 0;
+      const thicknessMm = Number(values.thickness) > 0 ? Number(values.thickness) : 0;
       elements.flutes.value = values.flutes;
-      elements.diameter.value = values.diameter;
       elements.toolType.value = normalizeToolType(values.toolType);
       elements.material.value = values.material;
-      elements.thickness.value = values.thickness;
+      elements.unitMode.value = normalizeUnitMode(values.unitMode);
+      setDimensionState(diameterMm, thicknessMm);
+      syncUnitModeUI();
+      applyDimensionInputsFromState();
       elements.rpmMode.value = normalizeRpmMode(values.rpmMode);
       elements.rpmManual.value = values.rpmManual;
       syncRpmModeUI();
@@ -564,12 +666,14 @@
     }
 
     function collectValues() {
+      const dimensions = getDimensionState();
       return {
         flutes: Math.max(1, Math.round(Number(elements.flutes.value) || 0)),
-        diameter: Number(elements.diameter.value),
+        diameter: dimensions.diameter,
         toolType: normalizeToolType(elements.toolType.value),
         material: elements.material.value,
-        thickness: Number(elements.thickness.value),
+        thickness: dimensions.thickness,
+        unitMode: normalizeUnitMode(elements.unitMode.value),
         rpmMode: normalizeRpmMode(elements.rpmMode.value),
         rpmManual: Number(elements.rpmManual.value),
         rpmPreset: elements.rpmPreset.value
@@ -610,12 +714,15 @@
       const feedRate = calculateFeedRate(tool, values.material);
       const plungeRate = calculateZFeedRate(tool, values.material);
 
-      elements.depthPerPassValue.textContent = formatMm(depthPerPass);
-      elements.feedRateValue.textContent = formatFeed(feedRate);
-      elements.plungeRateValue.textContent = formatFeed(plungeRate);
+      elements.depthPerPassValue.textContent = formatLength(depthPerPass, values.unitMode);
+      elements.feedRateValue.textContent = formatFeed(feedRate, values.unitMode);
+      elements.plungeRateValue.textContent = formatFeed(plungeRate, values.unitMode);
     }
 
-    function updateCalculator() {
+    function updateCalculator(options = {}) {
+      if (!options.preserveDimensionState) {
+        syncDimensionStateFromInputs();
+      }
       const values = collectValues();
       saveValues(values);
       renderResults(values);
@@ -624,6 +731,18 @@
     function bindEvents() {
       elements.form.addEventListener('input', updateCalculator);
       elements.form.addEventListener('change', updateCalculator);
+
+      elements.unitTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          const nextMode = normalizeUnitMode(button.dataset.unitMode);
+          if (elements.unitMode.value === nextMode) return;
+          syncDimensionStateFromInputs();
+          elements.unitMode.value = nextMode;
+          syncUnitModeUI();
+          applyDimensionInputsFromState();
+          updateCalculator({ preserveDimensionState: true });
+        });
+      });
 
       elements.rpmTabs.forEach((button) => {
         button.addEventListener('click', () => {
@@ -648,12 +767,16 @@
       const vbitFeed = calculateFeedRate({ ...sampleTool, bit: 'VBit' }, 'Hardwood / Plywood');
       const drillDepth = getDepthPerPass('Drill', 6, 18);
       const dewaltPreset = getDefaultPresetValue('dewalt');
+      const inchDiameter = formatInputValue(convertFromMm(6, 'inch'), 'inch');
+      const roundTripDiameter = convertToMm(inchDiameter, 'inch');
       console.assert(feed >= MIN_FEED_RATE, 'feed must respect minimum clamp');
       console.assert(plunge <= feed, 'plunge must never exceed feed');
       console.assert(vbitFeed < feed, 'vbit chip load reduction must lower feed');
       console.assert(drillDepth === 6, 'drill depth per pass should default to full diameter');
       console.assert(dewaltPreset === '2', 'dewalt default preset should use recommended speed');
       console.assert(getChipLoad('Copper / Brass', 6, 'End Mill') <= 0.025, 'chip load must stay clamped');
+      console.assert(inchDiameter === '0.24', '6 mm should display as 0.24 in');
+      console.assert(Math.abs(roundTripDiameter - 6.096) < 0.001, 'rounded inch values should convert back consistently');
     }
 
     populateMaterials();
