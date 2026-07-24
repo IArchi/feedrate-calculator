@@ -172,6 +172,11 @@
       background: #f8fafc;
     }
 
+    .result.is-limited {
+      border-color: var(--warning-border);
+      background: #fffaf0;
+    }
+
     .result-label {
       font-size: 0.8rem;
       font-weight: 700;
@@ -302,7 +307,7 @@
             <div class="result-help" id="depthPerPassHelp">50% of tool diameter, capped by material thickness.</div>
           </section>
 
-          <section class="result">
+          <section class="result" id="feedRateResult">
             <div class="result-label">Feed rate</div>
             <div class="result-value" id="feedRateValue">—</div>
             <div class="result-help" id="feedRateHelp">Based on RPM × flutes × chip load.</div>
@@ -375,6 +380,7 @@
       warning: document.getElementById('result-warning'),
       depthPerPassValue: document.getElementById('depthPerPassValue'),
       depthPerPassHelp: document.getElementById('depthPerPassHelp'),
+      feedRateResult: document.getElementById('feedRateResult'),
       feedRateValue: document.getElementById('feedRateValue'),
       feedRateHelp: document.getElementById('feedRateHelp'),
       plungeRateValue: document.getElementById('plungeRateValue'),
@@ -502,6 +508,17 @@
       elements.plungeRateHelp.textContent = '20% of feed rate, reduced again for deep plunges.';
     }
 
+    function updateFeedRateLimitState(limit) {
+      elements.feedRateResult.classList.toggle('is-limited', Boolean(limit));
+      if (limit === 'min') {
+        elements.feedRateHelp.textContent = `Based on RPM × flutes × chip load. Limited to minimum ${MIN_FEED_RATE.toLocaleString('en-US')} mm/min.`;
+        return;
+      }
+      if (limit === 'max') {
+        elements.feedRateHelp.textContent = `Based on RPM × flutes × chip load. Limited to maximum ${MAX_FEED_RATE.toLocaleString('en-US')} mm/min.`;
+      }
+    }
+
     function getChipLoad(material, toolDiameter, toolType = 'End Mill') {
       const materialData = (materialsDatabase[material] && materialsDatabase[material].chipLoad)
         || materialsDatabase['Hardwood / Plywood'].chipLoad;
@@ -518,7 +535,7 @@
       return clamp(chipLoad, materialData.min, materialData.max);
     }
 
-    function calculateFeedRate(tool, material) {
+    function calculateFeedRateDetails(tool, material) {
       const diameter = Number(tool.diameter) > 0 ? Number(tool.diameter) : 1;
       const stepDepth = Number(tool.step) > 0 ? Number(tool.step) : (diameter * 0.5);
       const chipLoad = getChipLoad(material, diameter, tool.bit || 'End Mill');
@@ -533,7 +550,16 @@
         feedRate *= 1 - (overload * 0.15);
       }
 
-      return clamp(round(feedRate), MIN_FEED_RATE, MAX_FEED_RATE);
+      const roundedFeedRate = round(feedRate);
+      const value = clamp(roundedFeedRate, MIN_FEED_RATE, MAX_FEED_RATE);
+      return {
+        value,
+        limit: roundedFeedRate < MIN_FEED_RATE ? 'min' : roundedFeedRate > MAX_FEED_RATE ? 'max' : null
+      };
+    }
+
+    function calculateFeedRate(tool, material) {
+      return calculateFeedRateDetails(tool, material).value;
     }
 
     function calculateZFeedRate(tool, material) {
@@ -694,6 +720,7 @@
         elements.feedRateValue.textContent = '—';
         elements.plungeRateValue.textContent = '—';
         updateResultHelp(normalizeToolType(values.toolType));
+        updateFeedRateLimitState(null);
         return;
       }
 
@@ -711,12 +738,14 @@
         step: depthPerPass
       };
 
-      const feedRate = calculateFeedRate(tool, values.material);
+      const feedRateDetails = calculateFeedRateDetails(tool, values.material);
+      const feedRate = feedRateDetails.value;
       const plungeRate = calculateZFeedRate(tool, values.material);
 
       elements.depthPerPassValue.textContent = formatLength(depthPerPass, values.unitMode);
       elements.feedRateValue.textContent = formatFeed(feedRate, values.unitMode);
       elements.plungeRateValue.textContent = formatFeed(plungeRate, values.unitMode);
+      updateFeedRateLimitState(feedRateDetails.limit);
     }
 
     function updateCalculator(options = {}) {
@@ -769,6 +798,8 @@
       const dewaltPreset = getDefaultPresetValue('dewalt');
       const inchDiameter = formatInputValue(convertFromMm(6, 'inch'), 'inch');
       const roundTripDiameter = convertToMm(inchDiameter, 'inch');
+      const minFeed = calculateFeedRateDetails({ diameter: 0.5, flutes: 1, bit: 'End Mill', rpm: 1000, step: 0.1 }, 'Copper / Brass');
+      const maxFeed = calculateFeedRateDetails({ diameter: 12, flutes: 4, bit: 'End Mill', rpm: 34000, step: 6 }, 'PVC Foam');
       console.assert(feed >= MIN_FEED_RATE, 'feed must respect minimum clamp');
       console.assert(plunge <= feed, 'plunge must never exceed feed');
       console.assert(vbitFeed < feed, 'vbit chip load reduction must lower feed');
@@ -777,6 +808,8 @@
       console.assert(getChipLoad('Copper / Brass', 6, 'End Mill') <= 0.025, 'chip load must stay clamped');
       console.assert(inchDiameter === '0.24', '6 mm should display as 0.24 in');
       console.assert(Math.abs(roundTripDiameter - 6.096) < 0.001, 'rounded inch values should convert back consistently');
+      console.assert(minFeed.limit === 'min', 'low feed should report minimum clamp');
+      console.assert(maxFeed.limit === 'max', 'high feed should report maximum clamp');
     }
 
     populateMaterials();
